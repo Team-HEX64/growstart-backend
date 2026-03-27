@@ -92,4 +92,65 @@ router.put('/profile', authenticate, async (req, res) => {
   }
 });
 
+router.get('/google-login', (req, res) => {
+  const { google } = require('googleapis');
+  const oauth2Client = new google.auth.OAuth2(
+    process.env.GOOGLE_CLIENT_ID,
+    process.env.GOOGLE_CLIENT_SECRET,
+    process.env.GOOGLE_REDIRECT_URI.replace('/google/callback', '/google-login/callback')
+  );
+  const url = oauth2Client.generateAuthUrl({
+    access_type: 'offline',
+    scope: ['https://www.googleapis.com/auth/userinfo.email', 'https://www.googleapis.com/auth/userinfo.profile'],
+    prompt: 'consent'
+  });
+  res.json({ url });
+});
+
+router.get('/google-login/callback', async (req, res) => {
+  try {
+    const { google } = require('googleapis');
+    const { code } = req.query;
+    if (!code) return res.redirect(process.env.FRONTEND_URL + '/app.html?auth=error');
+
+    const oauth2Client = new google.auth.OAuth2(
+      process.env.GOOGLE_CLIENT_ID,
+      process.env.GOOGLE_CLIENT_SECRET,
+      process.env.GOOGLE_REDIRECT_URI.replace('/google/callback', '/google-login/callback')
+    );
+    const { tokens } = await oauth2Client.getToken(code);
+    oauth2Client.setCredentials(tokens);
+
+    const oauth2 = google.oauth2({ version: 'v2', auth: oauth2Client });
+    const { data } = await oauth2.userinfo.get();
+
+    let user = await pool.query('SELECT id, email, plan, business_name, business_type, phone, city FROM users WHERE email = $1', [data.email]);
+
+    if (user.rows.length === 0) {
+      const bcrypt = require('bcryptjs');
+      const randomPass = require('crypto').randomBytes(16).toString('hex');
+      const hash = await bcrypt.hash(randomPass, 10);
+      user = await pool.query(
+        'INSERT INTO users (email, password_hash, business_name, google_token, google_refresh_token) VALUES ($1, $2, $3, $4, $5) RETURNING id, email, plan, business_name, business_type, phone, city',
+        [data.email, hash, data.name || '', tokens.access_token, tokens.refresh_token]
+      );
+    } else {
+      await pool.query(
+        'UPDATE users SET google_token = $1, google_refresh_token = COALESCE($2, google_refresh_token), updated_at = NOW() WHERE email = $3',
+        [tokens.access_token, tokens.refresh_token, data.email]
+      );
+    }
+
+    const u = user.rows[0];
+    const jwt = require('jsonwebtoken');
+    const token = jwt.sign({ userId: u.id, plan: u.plan }, process.env.JWT_SECRET, { expiresIn: '30d' });
+
+    const userData = encodeURIComponent(JSON.stringify({ id: u.id, email: u.email, plan: u.plan, business_name: u.business_name, business_type: u.business_type, phone: u.phone, city: u.city }));
+    res.redirect(process.env.FRONTEND_URL + '/app.html?auth=success&token=' + token + '&user=' + userData);
+  } catch (err) {
+    console.error('Google login error:', err);
+    res.redirect(process.env.FRONTEND_URL + '/app.html?auth=error');
+  }
+});
+
 module.exports = router;
