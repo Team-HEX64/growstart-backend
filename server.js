@@ -9,6 +9,7 @@ const leadRoutes = require('./routes/leads');
 const bookingRoutes = require('./routes/bookings');
 const aiRoutes = require('./routes/ai');
 const googleRoutes = require('./routes/google');
+const paymentRoutes = require('./routes/payments');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -34,6 +35,7 @@ app.use('/api/leads', leadRoutes);
 app.use('/api/bookings', bookingRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/auth/google', googleRoutes);
+app.use('/api/payments', paymentRoutes);
 
 app.use((req, res) => {
   res.status(404).json({ error: 'Route not found' });
